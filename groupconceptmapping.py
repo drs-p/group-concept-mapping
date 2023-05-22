@@ -51,8 +51,8 @@ parser.add_argument(
     default=0,
 )
 
-# By default, we use t-SNE to do the dimension reduction,
-# since it is better at preserving local structure than MDS
+#   By default, we use t-SNE to do the dimension reduction,
+#   since it is better at preserving local structure than MDS.
 group = parser.add_mutually_exclusive_group()
 group.add_argument(
     '--use-tsne',
@@ -151,7 +151,13 @@ parser.add_argument(
     type=int,
 )
 
-# ----------------  END OF OPTION AND ARGUMENT DEFINITIONS  ----------------
+parser.add_argument(
+    '--embed-only',
+    help='compute only embedding, not clusters',
+    action='store_true',
+    default=False,
+)
+
 
 options = parser.parse_args()
 if options.max_clusters < options.min_clusters:
@@ -162,6 +168,9 @@ if options.seed is None:
 np.random.seed(options.seed)
 print('Seed for PRNG:', options.seed)
 
+
+#   ----    end op option/argument parsing  ----
+
 # colors = plt.cm.get_cmap('tab20')
 colors = mpl.colors.ListedColormap([
     '#42145f', '#01689b', '#007bc7', '#a90061', '#ca005d', '#d52b1e',
@@ -169,71 +178,37 @@ colors = mpl.colors.ListedColormap([
     '#ffb612', '#e17000', '#f092cd', '#8fcae7', '#76d2b6'
 ])
 
-# Extract groups (label plus list of quote numbers) from input
+#   Extract groups (label plus list of quote numbers) from input.
 xlsx = pd.read_excel(options.filename, sheet_name=None, header=None, dtype=None)
-groups_for_proxy = {}
+sheets = list(xlsx.keys())
+assert len(sheets) == 1
 
-NO_LABEL = 'NO_LABEL'
-for proxy, df in xlsx.items():
-    if df.empty:
+cardSort = xlsx[sheets[0]]
+statements, *groups = [cardSort[i] for i in cardSort]
+statements = [s.encode("cp1252").decode("utf_8") for s in statements[1:]]
+n_statements = len(statements)
+
+labelled_group = {}
+similarity = np.zeros((n_statements, n_statements), dtype=int)
+for group in groups:
+    label = group[0].encode("cp1252").decode("utf_8")
+    indices = [i - 1 for i in range(1, len(group)) if group[i] == 1]
+    if len(indices) == 1:
         continue
 
-    # pd.read_excel() returns each sheet as a data frame;
-    # in  particular it handles unequal row lengths by filling out
-    # short rows with NaN's, so we have to get rid of those
-    groups_for_proxy[proxy] = {}
-    for i, row in df.iterrows():
-        if pd.isna(row[0]):
-            row[0] = '_'.join([NO_LABEL, proxy, str(i)])
-        label, *quotes = [c for c in row if not pd.isna(c)]
-        groups_for_proxy[proxy][label] = [int(q) for q in quotes]
+    labelled_group[label] = indices
+    for i, si in enumerate(indices):
+        similarity[si][si] += 1
+        for sj in indices[i+1:]:
+            similarity[si][sj] += 1
+            similarity[sj][si] += 1
 
-# Sanity check: test input for repeated or missing entries
-for proxy, proxy_results in groups_for_proxy.items():
-    seen = collections.defaultdict(list)
-    for label, quotes in proxy_results.items():
-        for q in quotes:
-            seen[q].append(label)
-    duplicates = [q for q in sorted(seen.keys()) if len(seen[q]) > 1]
-    for d in duplicates:
-        print('{}, {:d}: {}'.format(proxy, d, seen[d]), file=sys.stderr)
-    seen = [int(q) for q in seen.keys()]
-    missing = [q for q in range(1, max(seen) + 1) if q not in seen]
-    if missing:
-        print('{}, missing: {}'.format(proxy, missing), file=sys.stderr)
+n_sorters = max(similarity[i][i] for i in range(n_statements))
+for i in range(n_statements):
+    similarity[i][i] = n_sorters
+dissimilarity = pd.DataFrame(1 - similarity/n_sorters)
+dissimilarity.to_csv('distances.csv', header=False, index=False)
 
-# We create an incidence matrix for each sorter proxy; i.e., matrix[i, j] = 1
-# if and only if the proxy put quotes i and j into the same group
-matrix_for_proxy = {}
-for proxy in groups_for_proxy.keys():
-    groups = groups_for_proxy[proxy].values()
-
-    # Group numbers are one-based, so we add 1 to account for row/col zero
-    n_items = max(max(items) for items in groups) + 1
-
-    matrix = np.zeros((n_items, n_items), dtype=int)
-    for group in groups:
-        row = np.zeros(n_items, dtype=int)
-        row[group] = 1
-        matrix[group] += row
-
-    # Remove the zeroth row and column; these are artefacts stemming from
-    # Python indices begin zero-based, they don't contain actual data
-    matrix_for_proxy[proxy] = matrix[1:, 1:]
-
-    # Output each incidence matrix to a file
-    df = pd.DataFrame(matrix_for_proxy[proxy])
-    df.to_csv(proxy + '.csv', header=False, index=False)
-
-# Add individual incidence matrices to get similarity matrix;
-# write this to file and convert to *dis*similarity
-total = functools.reduce(np.add, matrix_for_proxy.values())
-df = pd.DataFrame(total)
-df.to_csv('similarity.csv', header=False, index=False)
-dissimilarity = 1 - df / len(matrix_for_proxy.keys())
-for i in range(len(dissimilarity)):
-    dissimilarity[i][i] = 0
-dissimilarity.to_csv('dissimilarity.csv', header=False, index=False)
 
 if options.use_tsne:
     tsne = TSNE(metric='precomputed', init='random', method='exact')
@@ -244,18 +219,26 @@ else:
     mds = MDS(n_components=2, metric=False, dissimilarity='precomputed')
     mds.fit(dissimilarity)
     embedding = mds.embedding_
-    # TODO: normalize this (how?)
     print('Stress =', mds.stress_)
+
+
+#   ----    end of embedding, start of clustering   ----
+
+if options.embed_only:
+    sys.exit()
+
 
 def average_point(points):
     '''Helper function to compute the average of an array of points.'''
     return functools.reduce(np.add, points) / len(points)
 
+
 def squared_distance(a, b):
     '''Helper function to compute the (squared) distance between two points.'''
     return np.dot(a - b, a - b)
 
-# Compute clustering and lists of quotes per cluster
+
+#   Compute clustering and lists of quotes per cluster.
 for n_clusters in range(options.min_clusters, options.max_clusters + 1):
     clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage='ward')
     clustering.fit(embedding)
@@ -265,8 +248,12 @@ for n_clusters in range(options.min_clusters, options.max_clusters + 1):
         clusters[i] = []
     for i in range(embedding.shape[0]):
         clusters[cluster_index[i]].append(i)
+    clusters.sort(key = lambda cluster: cluster[0])
+    for i, cluster in enumerate(clusters):
+        for j in cluster:
+            cluster_index[j] = i
 
-    # Plot location of quotes, coloured according to cluster
+    #   Plot location of quotes, coloured according to cluster.
     fig, ax = plt.subplots(figsize=[10.80, 10.80], dpi=300)
     ax.set_xticks([])
     ax.set_yticks([])
@@ -276,14 +263,14 @@ for n_clusters in range(options.min_clusters, options.max_clusters + 1):
         c=colors(cluster_index[:]),
     )
 
-    # Plot quote numbers next to dots; note that quote numbers are one-based
-    # whereas Python's indices are zero-based, hence the "+ 1"
+    #   Plot quote numbers next to dots; note that quote numbers are one-based
+    #   whereas Python's indices are zero-based, hence the "+ 1".
     if options.quote_id:
         for i in range(embedding.shape[0]):
             ax.text(embedding[i, 0], embedding[i, 1], i + 1)
 
-    # Compute and plot the centers of the clusters; plot the convex hull
-    # of the points in each cluster to better show the clusters
+    #   Compute and plot the centers of the clusters; plot the convex hull
+    #   of the points in each cluster to better show the clusters.
     cluster_centers = [None] * n_clusters
     for i in range(n_clusters):
         points = embedding[clusters[i]]
@@ -293,10 +280,11 @@ for n_clusters in range(options.min_clusters, options.max_clusters + 1):
         if options.cluster_center:
             ax.scatter(*avg, marker="x", color=colors(i))
         if options.cluster_id:
-            ax.text(*avg, i + 1, fontsize=16)
+            avg = [c + .5 for c in avg]
+            ax.text(*avg, clusters[i][0] + 1, fontsize=16)
 
-        # We need a try/except construct because ConvexHull will throw
-        # an Exception if a cluster has less than three points
+        #   We need a try/except construct because ConvexHull will throw
+        #   an Exception if a cluster has less than three points.
         if options.cluster_outline:
             try:
                 hull = ConvexHull(points)
@@ -310,47 +298,40 @@ for n_clusters in range(options.min_clusters, options.max_clusters + 1):
             except Exception:
                 pass
 
-    # Compute and plot the location of all labels given by the proxies
+    #   Compute and plot the location of all labels given by the proxies.
     location_for_label = {}
-    for proxy in groups_for_proxy.keys():
-        for label, quotes in groups_for_proxy[proxy].items():
-            if label.startswith(NO_LABEL):
-                continue
-            # "- 1" to convert quote #'s (one-based) to indices (zero-based)
-            quotes = [q - 1 for q in quotes]
-            avg = average_point(embedding[quotes])
-            location_for_label[(proxy, label)] = avg
-            if options.label_dot:
-                ax.scatter(*avg, marker=".", color="#b4b4b4")
-            if options.label_text:
-                ax.text(
-                    *avg,
-                    label,
-                    horizontalalignment='center',
-                    verticalalignment='center',
-                )
+    for label, quotes in labelled_group.items():
+        #   "- 1" to convert quote #'s (one-based) to indices (zero-based).
+        quotes = [q - 1 for q in quotes]
+        avg = average_point(embedding[quotes])
+        location_for_label[label] = avg
+        if options.label_dot:
+            ax.scatter(*avg, marker=".", color="#b4b4b4")
+        if options.label_text:
+            ax.text(*avg, label, horizontalalignment='center',
+                    verticalalignment='center')
 
     fig.savefig('clusters_{}.svg'.format(n_clusters))
     plt.close(fig)
 
-    # For each cluster, print the ten labels closest to its center.
-    # Once again, the + 1's take care of the difference between Python's
-    # indices (zero-based) and the group/quote numbers (one-based).
-    with open('clusters_{}.txt'.format(n_clusters), 'wt') as clusters:
+    # For each cluster, print the statements and ten labels closest to its center.
+    with open('clusters_{}.txt'.format(n_clusters), 'wt') as clusters_file:
         for i in range(n_clusters):
+            print(f"\n============\n CLUSTER {i+1:2d}\n============\n",
+                  file=clusters_file)
+            print("    ------------\n     Statements\n    ------------",
+                  file=clusters_file)
+            for j in clusters[i]:
+                print(f"        {statements[j]}", file=clusters_file)
+
             center = cluster_centers[i]
-            labels = sorted(
-                location_for_label.keys(),
-                key=lambda q: squared_distance(location_for_label[q], center)
-            )[:10]
-            print(
-                '{}\t{}\n\t{}\n'.format(
-                    i + 1,
-                    ', '.join(
-                        str(j + 1) for j in range(embedding.shape[0])
-                                if cluster_index[j] == i
-                    ),
-                    '\n\t'.join(l[1] for l in labels),
-                ),
-                file=clusters,
-            )
+            labels = sorted(location_for_label.keys(),
+                            key=lambda q: squared_distance(location_for_label[q],
+                                                           center)
+                           )[:10]
+            print("\n    --------\n     Labels\n    --------",
+                  file=clusters_file)
+            for label in labels:
+                print(f"        {label}", file=clusters_file)
+            print(file=clusters_file)
+
