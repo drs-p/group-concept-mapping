@@ -1,21 +1,25 @@
 Group Concept Mapping
 =====================
 
-This implements Jackson and Trochim's "Concept Mapping" algorithm [1].
-This is more commonly known as "group concept mapping", to avoid confusion
-with other things also called "concept mapping".
+This implements Jackson and Trochim's Concept Mapping algorithm [1].
+This is nowadays more commonly known as "group concept mapping",
+to avoid confusion with other things also called "concept mapping".
 
 1.  Kristin M. Jackson and William M. K. Trochim,
-    _"Concept Mapping as an Alternative Approach for the Analysis
-    of Open-Ended Survey Responses"_, Organizational Research Methods,
-    Vol. 5 No. 4, October 2002 (pp. 307-336)
+    _"Concept Mapping as an Alternative Approach for the Analysis of Open-Ended Survey Responses"_,
+    Organizational Research Methods, Vol. 5 No. 4, October 2002 (pp. 307-336)
 
 This was written mainly to process the data for S's papers, not as a general tool,
 so there isn't a lot of documentation :-(
 
-The input is a .xlsx file containing all statements (vertically) and all labeled groups
-(horizontally); cell (i, j) contains "1" if the i'th statement is included in the j'th
-group, and "0" otherwise:
+The program is called as
+
+    groupconceptmapping.py [options] input.xlsx min_clusters [max_clusters]
+
+The input  file `input.xlsx` is an Excel file with a single sheet,
+containing all statements in the first column and all labeled groups in the first row;
+cell (_i_, _j_) contains `1` if the _i_'th statement is included in the _j_'th group,
+and `0` otherwise:
 
             lbl1    lbl2    lbl3    ...
     stmt1   0       1       0       ...
@@ -23,6 +27,13 @@ group, and "0" otherwise:
     stmt3   0       1       1       ...
     ...
 
+The program generates images showing the statement clusters, plus a text file with lists
+of all statements per cluster as well as the 10 closest labels for each cluster.
+This is done for every number of clusters in the range from `min_clusters` to
+`max_clusters`; if not specified, `max_clusters` defaults to `min_clusters`.
+
+There are some options, mainly to control the amount of information included in each plot;
+run `groupconceptmapping.py --help` for a list and short description.
 
 ## License
 
