@@ -1,7 +1,8 @@
 Group Concept Mapping
 =====================
 
-This implements Jackson and Trochim's Concept Mapping algorithm [1].
+This implements Jackson and Trochim's
+[Concept Mapping algorithm [1]](https://journals.sagepub.com/doi/10.1177/109442802237114).
 This is nowadays more commonly known as "group concept mapping",
 to avoid confusion with other things also called "concept mapping".
 
